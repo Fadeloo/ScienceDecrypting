@@ -14,6 +14,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, modes, algorithms
 from cryptography.hazmat.primitives import padding
 import PyPDF2
 from PyPDF2.generic import *
+import glob
 
 req_data = """<?xml version="1.0" encoding="UTF-8"?>
 <auth-req>
@@ -308,79 +309,76 @@ def decrypt_file_key(password_from_file, password_from_server, iv_from_file, rig
 
 
 def decrypt_file(src, dest):
-    print("[Log] 解析源文件....")
-    with open(src, "rb") as fp:
-        # find rights position
-        fp.seek(0, os.SEEK_END)
-        fp.seek(fp.tell() - 30, os.SEEK_SET)
-        tail = fp.read()
-        m = re.search(r"startrights (\d+),(\d+)", tail.decode("latin"))
-        if not m:
-            raise CustomException("文件格式错误 {}".format(tail))
-        # find rights
-        fp.seek(int(m.group(1)), os.SEEK_SET)
-        eof_offset = int(m.group(1)) - 13
-        right_meta = fp.read(int(m.group(2))).decode("latin")
-    # request stage 1 password
-    root = ElementTree.fromstring(right_meta)
-    drm_url = root.find("./protect/auth/permit/server/url").text
-    file_id = root.find("./file-id").text
-    password_from_file = root.find("./protect/auth/permit/password").text
-    iv_from_file = root.find("./protect/auth/iv").text
-    rights = root.find("./rights").text
-    stripped_right_meta = re.sub(
-        r"\<rights\>[\w+/=]+\</rights\>", "<rights></rights>", right_meta)
+    try:
+        print("[Log] 解析源文件....")
+        with open(src, "rb") as fp:
+            # find rights position
+            fp.seek(0, os.SEEK_END)
+            fp.seek(fp.tell() - 30, os.SEEK_SET)
+            tail = fp.read()
+            m = re.search(r"startrights (\d+),(\d+)", tail.decode("latin"))
+            if not m:
+                raise CustomException("文件格式错误 {}".format(tail))
+            # find rights
+            fp.seek(int(m.group(1)), os.SEEK_SET)
+            eof_offset = int(m.group(1)) - 13
+            right_meta = fp.read(int(m.group(2))).decode("latin")
+        # request stage 1 password
+        root = ElementTree.fromstring(right_meta)
+        drm_url = root.find("./protect/auth/permit/server/url").text
+        file_id = root.find("./file-id").text
+        password_from_file = root.find("./protect/auth/permit/password").text
+        iv_from_file = root.find("./protect/auth/iv").text
+        rights = root.find("./rights").text
+        stripped_right_meta = re.sub(
+            r"\<rights\>[\w+/=]+\</rights\>", "<rights></rights>", right_meta)
 
-    print("[Log] 请求密钥...")
-    password_from_server = request_password(drm_url, file_id)
+        print("[Log] 请求密钥...")
+        password_from_server = request_password(drm_url, file_id)
 
-    print("[Log] 解密DRM信息...")
-    file_key = decrypt_file_key(password_from_file,
-                                password_from_server.encode("ascii"),
-                                iv_from_file,
-                                stripped_right_meta.encode("ascii"),
-                                rights)
-    print("[Log] 解密文件...")
-    origin_fp = open(src, "rb")
-    temp_fp = tempfile.TemporaryFile()
-    temp_fp.write(origin_fp.read(eof_offset))
-    origin_fp.close()
-    temp_fp.seek(0, os.SEEK_SET)
+        print("[Log] 解密DRM信息...")
+        file_key = decrypt_file_key(password_from_file,
+                                    password_from_server.encode("ascii"),
+                                    iv_from_file,
+                                    stripped_right_meta.encode("ascii"),
+                                    rights)
+        print("[Log] 解密文件...")
+        origin_fp = open(src, "rb")
+        temp_fp = tempfile.TemporaryFile()
+        temp_fp.write(origin_fp.read(eof_offset))
+        origin_fp.close()
+        temp_fp.seek(0, os.SEEK_SET)
 
-    output = PyPDF2.PdfFileWriter()
-    input_ = MyPdfFileReader(temp_fp)
-    input_.SetFileKey(file_key)
-    input_.strict = False
-    print("[Log] 文件 {} 共 {} 页.".format(src, input_.getNumPages()))
-    output.cloneReaderDocumentRoot(input_)
-    print("[Log] 写入文件")
-    outputStream = open(dest, "wb")
-    output.write(outputStream)
-    temp_fp.close()
-    print("[Success] 解密成功!")
+        output = PyPDF2.PdfFileWriter()
+        input_ = MyPdfFileReader(temp_fp)
+        input_.SetFileKey(file_key)
+        input_.strict = False
+        print("[Log] 文件 {} 共 {} 页.".format(src, input_.getNumPages()))
+        output.cloneReaderDocumentRoot(input_)
+        print("[Log] 写入文件")
+        outputStream = open(dest, "wb")
+        output.write(outputStream)
+        temp_fp.close()
+        print("[Success] 解密成功!")
+    except utils.PdfReadError as e:
+        print(f"[Error] 处理文件 {src} 时出错: {e}")
+    except Exception as e:
+        print(f"[Error] 未知错误: {e}")
 
+def process_all_files(input_folder, output_folder):
+    input_files = glob.glob(os.path.join(input_folder, "*"))
+    for input_file in input_files:
+        if os.path.isfile(input_file):
+            output_file = os.path.join(output_folder, os.path.basename(input_file))
+            print(f"Processing {input_file} -> {output_file}")
+            decrypt_file(input_file, output_file)
 
 def main():
-    parser = OptionParser(
-        usage="Usage: python3 %prog -i INPUT_FILE -o OUTPUT_FILE")
-    parser.add_option("-i", "--input", dest="src",
-                      help="原始文件名", metavar="FILE")
-    parser.add_option("-o", "--ouput", dest="dst",
-                      help="输出文件名", metavar="FILE")
-    (options, _) = parser.parse_args()
-    if not options.src or not options.dst:
-        parser.print_help()
-        exit(0)
-    if not os.path.isfile(options.src):
-        print("输入文件不存在")
-        parser.print_help()
-        exit(0)
-    if os.path.isfile(options.dst):
-        ans = input("文件 {} 已存在，继续运行将覆盖该文件，是否继续 [y/N]: ".format(options.dst))
-        if ans.lower() not in ["y", "yes"]:
-            exit(0)
-    decrypt_file(options.src, options.dst)
-
+    input_folder = "/home/yanghang/projects/ScienceDecrypting/input"
+    output_folder = "/home/yanghang/projects/ScienceDecrypting/output"
+    if not os.path.exists(output_folder):
+        os.makedirs(output_folder)
+    process_all_files(input_folder, output_folder)
 
 if __name__ == "__main__":
     try:

@@ -10,8 +10,8 @@ https://www.python.org/downloads/ 下载安装Python3
 ### PyPDF2/requests/...
 执行以下命令安装依赖
 ```bash
-pip3 install -U pip
-pip3 install -r requirements.txt
+pip install -U pip
+pip install -r requirements.txt
 ```
 ## Usage
 ```
