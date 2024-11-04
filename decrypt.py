@@ -15,6 +15,7 @@ from cryptography.hazmat.primitives import padding
 import PyPDF2
 from PyPDF2.generic import *
 import glob
+import binascii
 
 req_data = """<?xml version="1.0" encoding="UTF-8"?>
 <auth-req>
@@ -45,13 +46,16 @@ class MyDictionaryObject(DictionaryObject):
         debug = False
         tmp = stream.read(2)
         if tmp != b_("<<"):
-            raise utils.PdfReadError("Dictionary read error at byte %s: stream must begin with '<<'" % utils.hexStr(stream.tell()))
+            raise utils.PdfReadError(
+                "Dictionary read error at byte %s: stream must begin with '<<'"
+                % utils.hexStr(stream.tell())
+            )
         data = {}
         while True:
             tok = readNonWhitespace(stream)
-            if tok == b_('\x00'):
+            if tok == b_("\x00"):
                 continue
-            elif tok == b_('%'):
+            elif tok == b_("%"):
                 stream.seek(-1, 1)
                 skipOverComment(stream)
                 continue
@@ -59,7 +63,8 @@ class MyDictionaryObject(DictionaryObject):
                 # stream has truncated prematurely
                 raise PdfStreamError("Stream has ended unexpectedly")
 
-            if debug: print(("Tok:", tok))
+            if debug:
+                print(("Tok:", tok))
             if tok == b_(">"):
                 stream.read(1)
                 break
@@ -72,36 +77,43 @@ class MyDictionaryObject(DictionaryObject):
                 data[key] = value
             elif pdf.strict:
                 # multiple definitions of key not permitted
-                raise utils.PdfReadError("Multiple definitions in dictionary at byte %s for key %s" \
-                                           % (utils.hexStr(stream.tell()), key))
+                raise utils.PdfReadError(
+                    "Multiple definitions in dictionary at byte %s for key %s"
+                    % (utils.hexStr(stream.tell()), key)
+                )
             else:
-                warnings.warn("Multiple definitions in dictionary at byte %s for key %s" \
-                                           % (utils.hexStr(stream.tell()), key), utils.PdfReadWarning)
+                warnings.warn(
+                    "Multiple definitions in dictionary at byte %s for key %s"
+                    % (utils.hexStr(stream.tell()), key),
+                    utils.PdfReadWarning,
+                )
 
         pos = stream.tell()
         s = readNonWhitespace(stream)
-        if s == b_('s') and stream.read(5) == b_('tream'):
+        if s == b_("s") and stream.read(5) == b_("tream"):
             eol = stream.read(1)
             # odd PDF file output has spaces after 'stream' keyword but before EOL.
             # patch provided by Danial Sandler
-            while eol == b_(' '):
+            while eol == b_(" "):
                 eol = stream.read(1)
             assert eol in (b_("\n"), b_("\r"))
             if eol == b_("\r"):
                 # read \n after
-                if stream.read(1)  != b_('\n'):
+                if stream.read(1) != b_("\n"):
                     stream.seek(-1, 1)
             # this is a stream object, not a dictionary
             assert "/Length" in data
             length = data["/Length"]
-            if debug: print(data)
+            if debug:
+                print(data)
             stream_start = stream.tell()
             if isinstance(length, IndirectObject):
                 length = pdf.getObject(length)
                 stream.seek(stream_start, 0)
             data["__streamdata__"] = stream.read(length)
-            if debug: print("here")
-            #if debug: print(binascii.hexlify(data["__streamdata__"]))
+            if debug:
+                print("here")
+            # if debug: print(binascii.hexlify(data["__streamdata__"]))
             e = readNonWhitespace(stream)
             ndstream = stream.read(8)
             if (e + ndstream) != b_("endstream"):
@@ -124,12 +136,16 @@ class MyDictionaryObject(DictionaryObject):
                     p = extra.find(b_("endstream"))
                     if p >= 0:
                         stream.seek(stream_start + length + p + 9, 0)
-                        extra = extra[:p].rstrip(b_('\r\n '))
+                        extra = extra[:p].rstrip(b_("\r\n "))
                         data["__streamdata__"] = data["__streamdata__"] + extra
                     else:
-                        if debug: print(("E", e, ndstream, debugging.toHex(end)))
+                        if debug:
+                            print(("E", e, ndstream, binascii.hexlify(end)))
                         stream.seek(pos, 0)
-                        raise utils.PdfReadError("Unable to find 'endstream' marker after stream at byte %s." % utils.hexStr(stream.tell()))
+                        raise utils.PdfReadError(
+                            "Unable to find 'endstream' marker after stream at byte %s."
+                            % utils.hexStr(stream.tell())
+                        )
         else:
             stream.seek(pos, 0)
         if "__streamdata__" in data:
@@ -142,7 +158,7 @@ class MyDictionaryObject(DictionaryObject):
 
 def readObject(stream, pdf):
     tok = stream.read(1)
-    stream.seek(-1, 1) # reset to start
+    stream.seek(-1, 1)  # reset to start
     idx = ObjectPrefix.find(tok)
     if idx == 0:
         # name object
@@ -150,8 +166,8 @@ def readObject(stream, pdf):
     elif idx == 1:
         # hexadecimal string OR dictionary
         peek = stream.read(2)
-        stream.seek(-2, 1) # reset to start
-        if peek == b_('<<'):
+        stream.seek(-2, 1)  # reset to start
+        if peek == b_("<<"):
             return MyDictionaryObject.readFromStream(stream, pdf)
         else:
             return readHexStringFromStream(stream)
@@ -169,7 +185,7 @@ def readObject(stream, pdf):
         return NullObject.readFromStream(stream)
     elif idx == 7:
         # comment
-        while tok not in (b_('\r'), b_('\n')):
+        while tok not in (b_("\r"), b_("\n")):
             tok = stream.read(1)
         tok = readNonWhitespace(stream)
         stream.seek(-1, 1)
@@ -180,7 +196,7 @@ def readObject(stream, pdf):
             # number
             return NumberObject.readFromStream(stream)
         peek = stream.read(20)
-        stream.seek(-len(peek), 1) # reset to start
+        stream.seek(-len(peek), 1)  # reset to start
         if IndirectPattern.match(peek) != None:
             return IndirectObject.readFromStream(stream, pdf)
         else:
@@ -198,67 +214,106 @@ class MyPdfFileReader(PyPDF2.PdfFileReader):
     def getObject(self, indirectReference):
         debug = False
         if debug:
-            print(("looking at:", indirectReference.idnum,
-                  indirectReference.generation))
-        retval = self.cacheGetIndirectObject(indirectReference.generation,
-                                             indirectReference.idnum)
+            print(
+                ("looking at:", indirectReference.idnum, indirectReference.generation)
+            )
+        retval = self.cacheGetIndirectObject(
+            indirectReference.generation, indirectReference.idnum
+        )
         if retval != None:
             return retval
-        if indirectReference.generation == 0 and \
-                indirectReference.idnum in self.xref_objStm:
+        if (
+            indirectReference.generation == 0
+            and indirectReference.idnum in self.xref_objStm
+        ):
             retval = self._getObjectFromStream(indirectReference)
-        elif indirectReference.generation in self.xref and \
-                indirectReference.idnum in self.xref[indirectReference.generation]:
+        elif (
+            indirectReference.generation in self.xref
+            and indirectReference.idnum in self.xref[indirectReference.generation]
+        ):
             start = self.xref[indirectReference.generation][indirectReference.idnum]
             if debug:
-                print(("  Uncompressed Object", indirectReference.idnum,
-                      indirectReference.generation, ":", start))
+                print(
+                    (
+                        "  Uncompressed Object",
+                        indirectReference.idnum,
+                        indirectReference.generation,
+                        ":",
+                        start,
+                    )
+                )
             self.stream.seek(start, 0)
             idnum, generation = self.readObjectHeader(self.stream)
             if idnum != indirectReference.idnum and self.xrefIndex:
                 # Xref table probably had bad indexes due to not being zero-indexed
                 if self.strict:
-                    raise utils.PdfReadError("Expected object ID (%d %d) does not match actual (%d %d); xref table not zero-indexed."
-                                             % (indirectReference.idnum, indirectReference.generation, idnum, generation))
+                    raise utils.PdfReadError(
+                        "Expected object ID (%d %d) does not match actual (%d %d); xref table not zero-indexed."
+                        % (
+                            indirectReference.idnum,
+                            indirectReference.generation,
+                            idnum,
+                            generation,
+                        )
+                    )
                 else:
                     pass  # xref table is corrected in non-strict mode
             elif idnum != indirectReference.idnum:
                 # some other problem
-                raise utils.PdfReadError("Expected object ID (%d %d) does not match actual (%d %d)."
-                                         % (indirectReference.idnum, indirectReference.generation, idnum, generation))
+                raise utils.PdfReadError(
+                    "Expected object ID (%d %d) does not match actual (%d %d)."
+                    % (
+                        indirectReference.idnum,
+                        indirectReference.generation,
+                        idnum,
+                        generation,
+                    )
+                )
             assert generation == indirectReference.generation
             retval = readObject(self.stream, self)
 
             # override encryption is used for the /Encrypt dictionary
             if not self._override_encryption and self.isEncrypted:
                 # if we don't have the encryption key:
-                if not hasattr(self, '_decryption_key'):
+                if not hasattr(self, "_decryption_key"):
                     raise utils.PdfReadError("file has not been decrypted")
                 # otherwise, decrypt here...
                 import struct
+
                 pack1 = struct.pack("<i", indirectReference.idnum)[:3]
                 pack2 = struct.pack("<i", indirectReference.generation)[:2]
-                key = self._decryption_key + pack1 + pack2 + b'sAlT'
+                key = self._decryption_key + pack1 + pack2 + b"sAlT"
                 assert len(key) == (len(self._decryption_key) + 9)
                 md5_hash = hashlib.md5(key).digest()
-                key = md5_hash[:min(16, len(self._decryption_key) + 5)]
+                key = md5_hash[: min(16, len(self._decryption_key) + 5)]
                 retval = self._decryptObject(retval, key)
         else:
-            warnings.warn("Object %d %d not defined." % (indirectReference.idnum,
-                                                         indirectReference.generation), utils.PdfReadWarning)
+            warnings.warn(
+                "Object %d %d not defined."
+                % (indirectReference.idnum, indirectReference.generation),
+                utils.PdfReadWarning,
+            )
             # if self.strict:
             raise utils.PdfReadError("Could not find object.")
-        self.cacheIndirectObject(indirectReference.generation,
-                                 indirectReference.idnum, retval)
+        self.cacheIndirectObject(
+            indirectReference.generation, indirectReference.idnum, retval
+        )
         return retval
 
     def _decryptObject(self, obj, key):
         if isinstance(obj, ByteStringObject) or isinstance(obj, TextStringObject):
-            obj = createStringObject(aes_decrypt(
-                key, obj.original_bytes[:len(key)], obj.original_bytes[len(key):], True))
+            obj = createStringObject(
+                aes_decrypt(
+                    key,
+                    obj.original_bytes[: len(key)],
+                    obj.original_bytes[len(key) :],
+                    True,
+                )
+            )
         elif isinstance(obj, StreamObject):
             obj._data = aes_decrypt(
-                key, obj._data[:len(key)], obj._data[len(key):], True)
+                key, obj._data[: len(key)], obj._data[len(key) :], True
+            )
         elif isinstance(obj, DictionaryObject):
             for dictkey, value in list(obj.items()):
                 obj[dictkey] = self._decryptObject(value, key)
@@ -269,36 +324,38 @@ class MyPdfFileReader(PyPDF2.PdfFileReader):
 
 
 def request_password(url, file_id):
-    r = requests.post(url, headers={
-        "User-Agent": "Readerdex 2.0",
-        "Cache-Control": "no-cache"
-    }, data=req_data.format(file_id))
+    r = requests.post(
+        url,
+        headers={"User-Agent": "Readerdex 2.0", "Cache-Control": "no-cache"},
+        data=req_data.format(file_id),
+    )
     if r.status_code != 200:
-        raise CustomException(
-            "服务器异常，请稍后再试, file id: {}".format(file_id))
+        raise CustomException("服务器异常，请稍后再试, file id: {}".format(file_id))
     try:
         root = ElementTree.fromstring(r.text)
     except Exception:
-        raise CustomException(
-            "invilid response, file id: {}".format(file_id))
+        raise CustomException("invilid response, file id: {}".format(file_id))
     password = root.find("./password").text
     if not password or not password.strip():
         raise CustomException(
-            "无法获取密码，文件可能已过期, file id:{}".format(file_id))
+            "无法获取密码，文件可能已过期, file id:{}".format(file_id)
+        )
     return password.strip()
 
 
-def decrypt_file_key(password_from_file, password_from_server, iv_from_file, right_meta, rights):
-    pass_dec = aes_decrypt(password_from_server, iv_first,
-                           base64.b64decode(password_from_file))
+def decrypt_file_key(
+    password_from_file, password_from_server, iv_from_file, right_meta, rights
+):
+    pass_dec = aes_decrypt(
+        password_from_server, iv_first, base64.b64decode(password_from_file)
+    )
     m = hashlib.sha256()
     m.update(pass_dec[:0x20])
     m.update(right_meta)
     sha256 = m.digest()
     iv_second = base64.b64decode(iv_from_file)
     rights_dec = aes_decrypt(sha256, iv_second[:16], base64.b64decode(rights))
-    m = re.search(r"<encrypt>([0-9a-f]+)</encrypt>",
-                  rights_dec.decode("utf-8"))
+    m = re.search(r"<encrypt>([0-9a-f]+)</encrypt>", rights_dec.decode("utf-8"))
     if not m:
         raise CustomException("fail to get encrypt key: {}", rights_dec)
     pass_in_rights = m.group(1)
@@ -331,17 +388,20 @@ def decrypt_file(src, dest):
         iv_from_file = root.find("./protect/auth/iv").text
         rights = root.find("./rights").text
         stripped_right_meta = re.sub(
-            r"\<rights\>[\w+/=]+\</rights\>", "<rights></rights>", right_meta)
+            r"\<rights\>[\w+/=]+\</rights\>", "<rights></rights>", right_meta
+        )
 
         print("[Log] 请求密钥...")
         password_from_server = request_password(drm_url, file_id)
 
         print("[Log] 解密DRM信息...")
-        file_key = decrypt_file_key(password_from_file,
-                                    password_from_server.encode("ascii"),
-                                    iv_from_file,
-                                    stripped_right_meta.encode("ascii"),
-                                    rights)
+        file_key = decrypt_file_key(
+            password_from_file,
+            password_from_server.encode("ascii"),
+            iv_from_file,
+            stripped_right_meta.encode("ascii"),
+            rights,
+        )
         print("[Log] 解密文件...")
         origin_fp = open(src, "rb")
         temp_fp = tempfile.TemporaryFile()
@@ -365,6 +425,7 @@ def decrypt_file(src, dest):
     except Exception as e:
         print(f"[Error] 未知错误: {e}")
 
+
 def process_all_files(input_folder, output_folder):
     input_files = glob.glob(os.path.join(input_folder, "*"))
     for input_file in input_files:
@@ -373,12 +434,14 @@ def process_all_files(input_folder, output_folder):
             print(f"Processing {input_file} -> {output_file}")
             decrypt_file(input_file, output_file)
 
+
 def main():
     input_folder = "/home/yanghang/projects/ScienceDecrypting/input"
     output_folder = "/home/yanghang/projects/ScienceDecrypting/output"
     if not os.path.exists(output_folder):
         os.makedirs(output_folder)
     process_all_files(input_folder, output_folder)
+
 
 if __name__ == "__main__":
     try:
@@ -391,6 +454,8 @@ if __name__ == "__main__":
             print("[Error] 未知错误: ", str(exc))
         else:
             print("[Error]", str(exc))
-        print("\n如果你需要帮助，请复制以下信息到GitHub ( https://github.com/301Moved/ScienceDecrypting/issues/new ) 上提交Issue")
+        print(
+            "\n如果你需要帮助，请复制以下信息到GitHub ( https://github.com/301Moved/ScienceDecrypting/issues/new ) 上提交Issue"
+        )
         print("-" * 64)
         traceback.print_exc()
